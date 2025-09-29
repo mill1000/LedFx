@@ -192,7 +192,7 @@ class MQTT_HASS(Integration):
             "sw_version": f"{PROJECT_VERSION}",
         }
 
-    def _publish_sensor_config(self, sensor: str, config: EntityConfig) -> None:
+    def _publish_sensor_discovery_config(self, sensor: str, config: EntityConfig) -> None:
         """Publish a sensor component discovery config."""
         discovery_config = {
             "name": config.name,
@@ -212,7 +212,7 @@ class MQTT_HASS(Integration):
             json.dumps(discovery_config),
         )
 
-    def _publish_select_config(self, select: str, options: list[str], config: EntityConfig) -> None:
+    def _publish_select_discovery_config(self, select: str, options: list[str], config: EntityConfig) -> None:
         """Publish a select component discovery config."""
         discovery_config = {
             "name": config.name,
@@ -234,7 +234,7 @@ class MQTT_HASS(Integration):
             json.dumps(discovery_config),
         )
 
-    def _publish_switch_config(self, switch: str, config: EntityConfig) -> None:
+    def _publish_switch_discovery_config(self, switch: str, config: EntityConfig) -> None:
         """Publish a switch component discovery config."""
         discovery_config = {
             "name": config.name,
@@ -254,7 +254,7 @@ class MQTT_HASS(Integration):
             json.dumps(discovery_config),
         )
 
-    def _publish_light_config(self, light: str, effects: list[str], config: EntityConfig) -> None:
+    def _publish_light_discovery_config(self, light: str, effects: list[str], config: EntityConfig) -> None:
         """Publish a light component discovery config."""
         discovery_config = {
             "name": config.name,
@@ -288,7 +288,7 @@ class MQTT_HASS(Integration):
             json.dumps(discovery_config),
         )
 
-    def _publish_config(self) -> None:
+    def _publish_discovery_config(self) -> None:
         """Publish all discovery configs."""
         # Pixle count sensor
         pixel_count = EntityConfig(
@@ -297,7 +297,7 @@ class MQTT_HASS(Integration):
             icon="mdi:led-variant-outline",
             entity_category="diagnostic"
         )
-        self._publish_sensor_config("pixel_count_sensor", pixel_count)
+        self._publish_sensor_discovery_config("pixel_count_sensor", pixel_count)
 
         # Scene selector
         scene_select = EntityConfig(
@@ -305,7 +305,7 @@ class MQTT_HASS(Integration):
             unique_id="ledfxsceneselect",  # TODO
             icon="mdi:image-multiple-outline",
         )
-        self._publish_select_config(
+        self._publish_select_discovery_config(
             "scene",
             list(self._ledfx.scenes._scenes.keys()),
             scene_select,
@@ -317,7 +317,7 @@ class MQTT_HASS(Integration):
             unique_id="ledfxaudio",  # TODO
             icon="mdi:volume-high",
         )
-        self._publish_select_config(
+        self._publish_select_discovery_config(
             "audio_source",
             [*AudioInputSource.input_devices().values()],
             audio_select,
@@ -329,7 +329,7 @@ class MQTT_HASS(Integration):
             unique_id="ledfxplay",  # TODO
             icon="mdi:play-pause",
         )
-        self._publish_switch_config("pause", main_switch)
+        self._publish_switch_discovery_config("pause", main_switch)
 
         # Create light for each virtual segment
         for virtual in self._ledfx.virtuals.values():
@@ -351,7 +351,7 @@ class MQTT_HASS(Integration):
             if virtual.config["icon_name"].startswith("mdi:"):
                 entity_config.icon = virtual.config["icon_name"]
 
-            self._publish_light_config(
+            self._publish_light_discovery_config(
                 virtual.id,
                 list(self._ledfx.effects.classes().keys()),
                 entity_config
@@ -473,7 +473,7 @@ class MQTT_HASS(Integration):
             )
         )
 
-        self._publish_config()
+        self._publish_discovery_config()
 
         client.publish(f"{self._state_prefix}/state", "HomeAssistant initialized")
 
