@@ -11,10 +11,14 @@ from ledfx.color import parse_color
 from ledfx.config import save_config
 from ledfx.consts import PROJECT_VERSION
 from ledfx.effects.audio import AudioInputSource
+from ledfx.effects.singleColor import SingleColorEffect
 from ledfx.events import Event
 from ledfx.integrations import Integration
 
 _LOGGER = logging.getLogger(__name__)
+
+STATE_ON = "ON"
+STATE_OFF = "OFF"
 
 
 @dataclass
@@ -112,74 +116,13 @@ class MQTT_HASS(Integration):
         self._data = []
         self._listeners = []
 
-        self._host = f"{extract_ip()}:{ledfx.port}"
+        self._host = f"{extract_ip()}:{ledfx.port}"  # TODO hash this into a "unique" ID? or get MAC address?
 
         self._state_prefix = self._config['state_topic']
         self._discovery_prefix = self._config['discovery_topic']
 
     def _discovery_topic(self, platform: str) -> str:
         return f"{self._discovery_prefix}/{platform}/ledfx"
-
-    def _publish_virtual_config(self, virtual_id):
-        virtual = self._ledfx.virtuals.get(virtual_id)
-        self._client.publish(
-            f"{self._discovery_topic("light")}/{virtual_id}/meta",
-            json.dumps(virtual.config),
-        )
-
-    def _publish_virtual_paused(self, virtual_id):
-        virtual = self._ledfx.virtuals.get(virtual_id)
-        paused_state = "OFF"
-        if virtual.active:
-            paused_state = "ON"
-        self._client.publish(
-            f"{self._discovery_topic("light")}/{virtual_id}/state",
-            json.dumps({"state": paused_state}),
-        )
-
-    def _publish_audio_input_changed(self, event):
-        self._client.publish(
-            f"{self._discovery_topic("select")}/ledfxaudio/state",
-            event.audio_input_device_name,
-        )
-
-    def _publish_scene_actived(self, event):
-        self._client.publish(
-            f"{self._discovery_topic("select")}/ledfxsceneselect/state",
-            event.scene_id,
-        )
-
-    def _publish_global_paused_state(self, event):
-        paused_state = "OFF"
-        if self._ledfx.virtuals._paused:
-            paused_state = "OFF"
-        else:
-            paused_state = "ON"
-        self._client.publish(
-            f"{self._discovery_topic("switch")}/ledfxplay/state",
-            paused_state,
-        )
-
-    def _publish_single_color_updated(self, event):
-        color = parse_color(event.effect_config.get("color"))
-        self._client.publish(
-            f"{self._discovery_topic("light")}/{event.virtual_id}/state",
-            json.dumps(
-                {
-                    "state": "on",
-                    "color": [color.red, color.green, color.blue],
-                    "effect": event.effect_config.get("color"),
-                }
-            ),
-        )
-
-    def _publish_paused_state(self, event):
-        virtual = self._ledfx.virtuals.get(event.virtual_id)
-        paused_state = "ON" if virtual.active else "OFF"
-        self._client.publish(
-            f"{self._state_prefix}/{event.virtual_id}/state",
-            json.dumps({"state": paused_state}),
-        )
 
     @property
     def _hass_device(self) -> dict[str, Any]:
@@ -201,7 +144,6 @@ class MQTT_HASS(Integration):
             "device": self._hass_device,
             "~": f"{self._state_prefix}/{sensor}",
             "stat_t": "~/state",
-
         }
 
         if category := config.entity_category:
@@ -223,7 +165,6 @@ class MQTT_HASS(Integration):
             "cmd_t": "~/set",
             "stat_t": "~/state",
             "options": options,
-
         }
 
         if category := config.entity_category:
@@ -264,20 +205,17 @@ class MQTT_HASS(Integration):
             "~": f"{self._state_prefix}/{light}",
             "cmd_t": "~/set",
             "stat_t": "~/state",
-            "stat_tpl": "{{ value_json.state | lower }}",
-            "stat_val_tpl": "{{ value_json.state | lower }}",
-            "schema": "template",
-            "brightness": False,
-            "enabled_by_default": True,
-            "command_on_template": command_template,
-            "command_off_template": '{"state": "off"}',
-            "red_template": "{{ value_json.color[0] }}",
-            "green_template": "{{ value_json.color[1] }}",
-            "blue_template": "{{ value_json.color[2] }}",
-            "effect_template": "{{ value_json.effect }}",
+            "schema": "json",
+            "brightness": True,
+            "brightness_scale": 100,
             "json_attributes_topic": "~/meta",
             "effect": True if len(effects) > 0 else False,
             "effect_list": effects,
+            "flash": False,
+            "json_attributes_topic": "~/attributes",
+            "supported_color_modes": ["rgb"],  # TODO
+            # TODO transition?
+            # TODO white scale?
         }
 
         if category := config.entity_category:
@@ -342,6 +280,10 @@ class MQTT_HASS(Integration):
             ):
                 continue
 
+            # TODO Feels like there should be a "setup" method for each entity
+            # to handle discovery & subscription
+            self._client.subscribe(f"{self._state_prefix}/{virtual.id}/set")
+
             entity_config = EntityConfig(
                 name=name,
                 unique_id=virtual.id,
@@ -353,7 +295,7 @@ class MQTT_HASS(Integration):
 
             self._publish_light_discovery_config(
                 virtual.id,
-                list(self._ledfx.effects.classes().keys()),
+                [e.NAME for e in self._ledfx.effects.classes().values()],
                 entity_config
             )
 
@@ -407,6 +349,71 @@ class MQTT_HASS(Integration):
         #     ),
         # )
 
+    def _on_virtual_config_update(self, event):
+        # Event on settings change but not edit device
+        _LOGGER.warning("Virtual config update event %s fosr %s", event, event.virtual_id)
+
+        virtual = self._ledfx.virtuals.get(event.virtual_id)
+        self._client.publish(
+            f"{self._state_prefix}/{event.virtual_id}/attributes",
+            json.dumps(virtual.config),
+        )
+
+    def _on_audio_source_changed(self, event):
+        # Can't trigger?
+        _LOGGER.warning("Audio source changed event %s", event)
+        self._client.publish(
+            f"{self._state_prefix}/audio_source/state",
+            event.audio_input_device_name,
+        )
+
+    def _on_scene_activated(self, event):
+        # Was able to trigger
+        _LOGGER.warning("Scene activated event %s", event)
+        self._client.publish(
+            f"{self._state_prefix}/scene/state",
+            event.scene_id,
+        )
+
+    def _on_global_state_paused(self, event):
+        # Was able to trigger
+        _LOGGER.warning("Global state updated %s", event)
+        paused_state = "OFF" if self._ledfx.virtuals._paused else "ON"
+        self._client.publish(
+            f"{self._state_prefix}/pause/state",
+            paused_state,
+        )
+
+    def _on_virtual_update(self, event):
+        # Was able to trigger
+        _LOGGER.warning("Virtual update event %s for %s", event.event_type, event.virtual_id)
+
+        virtual = self._ledfx.virtuals.get(event.virtual_id)
+
+        state = {
+            "state": STATE_ON if virtual.active else STATE_OFF
+        }
+
+        if event.event_type == Event.EFFECT_SET:
+            effect = virtual.active_effect
+            if effect:
+                state["effect"] = effect.name
+                state["brightness"] = 100 * effect.brightness
+                if effect.name == SingleColorEffect.NAME:
+                    color = parse_color(effect.config["color"])
+                    state["color"] = {
+                        "r": color.red,
+                        "g": color.green,
+                        "b": color.blue
+                    }
+                    state["color_mode"] = "rgb"  # TODO color ignored if no color_mode?
+
+        _LOGGER.warning("Publish virtual state %r", state)
+        self._client.publish(
+            f"{self._state_prefix}/{virtual.id}/state",
+            json.dumps(state)
+        )
+
     def _on_mqtt_connect(self, client, userdata, flags, rc) -> None:
         """MQTT callback when we connect to the broker."""
         # Save client now that we're online
@@ -434,48 +441,56 @@ class MQTT_HASS(Integration):
 
         self._listeners.append(
             self._ledfx.events.add_listener(
-                self._publish_scene_actived,
-                Event.SCENE_ACTIVATED,
+                self._on_scene_activated, Event.SCENE_ACTIVATED,
             )
         )
 
         self._listeners.append(
             self._ledfx.events.add_listener(
-                self._publish_single_color_updated,
-                Event.EFFECT_SET,
-                event_filter={"effect_name": "Single Color"},
+                self._on_virtual_update, Event.EFFECT_SET,
             )
         )
 
         self._listeners.append(
             self._ledfx.events.add_listener(
-                self._publish_virtual_config,
+                self._on_virtual_update, Event.VIRTUAL_PAUSE
+            )
+        )
+
+        # Useless event
+        # self._listeners.append(
+        #     self._ledfx.events.add_listener(
+        #         self._on_virtual_update,
+        #         Event.EFFECT_CLEARED,
+        #     )
+        # )
+
+        self._listeners.append(
+            self._ledfx.events.add_listener(
+                self._on_virtual_config_update,
                 Event.VIRTUAL_CONFIG_UPDATE,
             )
         )
 
         self._listeners.append(
             self._ledfx.events.add_listener(
-                self._publish_global_paused_state, Event.GLOBAL_PAUSE
+                self._on_global_state_paused, Event.GLOBAL_PAUSE
             )
         )
 
         self._listeners.append(
             self._ledfx.events.add_listener(
-                self._publish_paused_state, Event.VIRTUAL_PAUSE
-            )
-        )
-
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._publish_audio_input_changed,
+                self._on_audio_source_changed,
                 Event.AUDIO_INPUT_DEVICE_CHANGED,
             )
         )
 
         self._publish_discovery_config()
 
-        client.publish(f"{self._state_prefix}/state", "HomeAssistant initialized")
+        # client.publish(f"{self._state_prefix}/state", json.dumps{"initialized": true})
+
+        # TODO should publish entire states on connect
+        # but updates can be partial?
 
     def _on_mqtt_message(self, client, userdata, msg) -> None:
         """MQTT callback when messages are received."""
@@ -485,13 +500,26 @@ class MQTT_HASS(Integration):
             + "\n[MQTT    ] Payload: "
             + str(msg.payload)
         )
-        return
-        segs = msg.topic.split("/")
+
+        # Parse incoming payload
         try:
             payload = json.loads(msg.payload)
-        except json.decoder.JSONDecodeError:
-            payload = msg.payload.decode("utf-8")
+        except json.decoder.JSONDecodeError as e:
+            _LOGGER.error("Failed to parse payload '%s'. Error: %s", msg.payload, e)
+            return
 
+        prefix, entity, action = msg.topic.split("/")
+        if prefix != self._state_prefix:
+            _LOGGER.warning("Received unexpected MQTT message at '%s'", msg.topic)
+            return
+
+        if action != "set":
+            _LOGGER.warning("Received unknown MQTT action '%s'", action)
+            return
+
+        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", msg.topic, msg.payload)
+        # TODO Need a map of entities -> objects, or someway to differential virtuals vs hardcoded entities like pause, selects, etc
+        return
         paused_state = "OFF"
         if self._ledfx.virtuals._paused:
             paused_state = "OFF"
