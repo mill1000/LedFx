@@ -2,7 +2,7 @@ import json
 import logging
 import socket
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 import paho.mqtt.client as mqtt
 import voluptuous as vol
@@ -121,6 +121,12 @@ class MQTT_HASS(Integration):
         self._state_prefix = self._config['state_topic']
         self._discovery_prefix = self._config['discovery_topic']
 
+        self._mqtt_listeners = []
+
+    def _add_mqtt_listener(self, topic_regex: str, callback: Callable):
+        self._mqtt_listeners.append((re.compile(topic_regex), callback))
+
+
     def _discovery_topic(self, platform: str) -> str:
         return f"{self._discovery_prefix}/{platform}/ledfx"
 
@@ -202,13 +208,12 @@ class MQTT_HASS(Integration):
             "unique_id": config.unique_id,
             "icon": config.icon,
             "device": self._hass_device,
-            "~": f"{self._state_prefix}/{light}",
+            "~": f"{self._state_prefix}/virtuals/{light}",
             "cmd_t": "~/set",
             "stat_t": "~/state",
             "schema": "json",
             "brightness": True,
             "brightness_scale": 100,
-            "json_attributes_topic": "~/meta",
             "effect": True if len(effects) > 0 else False,
             "effect_list": effects,
             "flash": False,
@@ -279,10 +284,6 @@ class MQTT_HASS(Integration):
                 or name.endswith("-foreground")
             ):
                 continue
-
-            # TODO Feels like there should be a "setup" method for each entity
-            # to handle discovery & subscription
-            self._client.subscribe(f"{self._state_prefix}/{virtual.id}/set")
 
             entity_config = EntityConfig(
                 name=name,
@@ -487,10 +488,35 @@ class MQTT_HASS(Integration):
 
         self._publish_discovery_config()
 
+        # Subscribe to all virtuals
+        self._client.subscribe(f"{self._state_prefix}/virtuals/#")
+
+        # Add listener to catch all virtual set command
+        self._add_mqtt_listener(rf"{self._state_prefix}/virtuals/(?P<virtual_id>[^/]+)/set", self._on_virtual_set)
+
         # client.publish(f"{self._state_prefix}/state", json.dumps{"initialized": true})
 
         # TODO should publish entire states on connect
         # but updates can be partial?
+
+    def _on_virtual_set(self, topic, payload, match):
+        # Get ID from RE match
+        virtual_id = match.group('virtual_id')
+
+        # Grab the virtual
+        virtual = self._ledfx.virtuals.get(virtual_id, None)
+        if not virtual:
+            _LOGGER.error("Received MQTT set for unknown virtual '%s'.", virtual_id)
+            return
+
+        if state := payload.get("state")
+            virtual.active = state == STATE_ON
+
+        if effect := payload.get("effect"):
+            # TODO get effect from [e.NAME for e in self._ledfx.effects.classes().values()],
+            # effects.create_effect() w/ empty config?
+            # virtual.set_effect
+            pass
 
     def _on_mqtt_message(self, client, userdata, msg) -> None:
         """MQTT callback when messages are received."""
@@ -501,84 +527,86 @@ class MQTT_HASS(Integration):
             + str(msg.payload)
         )
 
+        # Sanity check incoming message is at the right prefix
+        prefix, *parts = msg.topic.split("/")
+        if prefix != self._state_prefix:
+            _LOGGER.warning("Received unexpected MQTT message at '%s'", msg.topic)
+            return
+
         # Parse incoming payload
+        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", msg.topic, msg.payload)
         try:
             payload = json.loads(msg.payload)
         except json.decoder.JSONDecodeError as e:
             _LOGGER.error("Failed to parse payload '%s'. Error: %s", msg.payload, e)
             return
 
-        prefix, entity, action = msg.topic.split("/")
-        if prefix != self._state_prefix:
-            _LOGGER.warning("Received unexpected MQTT message at '%s'", msg.topic)
-            return
+        # Make required callbacks
+        for pattern, callback in self._mqtt_listeners:
+            if match := pattern.fullmatch(topic):
+                callback(topic, payload, match)
 
-        if action != "set":
-            _LOGGER.warning("Received unknown MQTT action '%s'", action)
-            return
+    
 
-        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", msg.topic, msg.payload)
         # TODO Need a map of entities -> objects, or someway to differential virtuals vs hardcoded entities like pause, selects, etc
         return
-        paused_state = "OFF"
-        if self._ledfx.virtuals._paused:
-            paused_state = "OFF"
-        else:
-            paused_state = "ON"
 
-        # React to Internal State-Handler
-        total_pixels = 0
-        for device in self._ledfx.devices.values():
-            total_pixels += device.pixel_count
+        # TODO this is the initial state push
+        # paused_state = "OFF"
+        # if self._ledfx.virtuals._paused:
+        #     paused_state = "OFF"
+        # else:
+        #     paused_state = "ON"
 
-        active_pixels = 0
-        for virtual in self._ledfx.virtuals.values():
-            if virtual.active:
-                active_pixels += virtual.pixel_count
+        # # React to Internal State-Handler
+        # total_pixels = 0
+        # for device in self._ledfx.devices.values():
+        #     total_pixels += device.pixel_count
 
-        if segs[0] == "ledfx":
-            if payload == "HomeAssistant initialized":
-                virtual = self._ledfx.virtuals.get(
-                    next(iter(self._ledfx.virtuals))
-                )
-                client.publish(
-                    f"{self._discovery_topic("select")}/ledfxtransitiontype/state",
-                    virtual.config["transition_mode"],
-                )
-                client.publish(
-                    f"{self.discovery_topic}/number/ledfxtransitiontime/state",
-                    virtual.config["transition_time"],
-                )
-                # PausedState
-                client.publish(
-                    f"{self._discovery_topic("switch")}/ledfxplay/state",
-                    paused_state,
-                )
-                # AudioSelector
-                client.publish(
-                    f"{self._discovery_topic("select")}/ledfxaudio/state",
-                    AudioInputSource.input_devices()[
-                        self._ledfx.config.get("audio", {}).get(
-                            "audio_device", {}
-                        )
-                    ],
-                )
-                # Pixel-Sensor
-                client.publish(
-                    f"{self.discovery_topic}/sensor/ledfxpixelsensor/state",
-                    str(active_pixels) + " / " + str(total_pixels),
-                )
-                # publish all virtual data on connect (meta)
-                for virtual in self._ledfx.virtuals.values():
-                    self._publish_virtual_config(virtual.id, client)
-                    self._publish_virtual_paused(virtual.id, client)
-            return
+        # active_pixels = 0
+        # for virtual in self._ledfx.virtuals.values():
+        #     if virtual.active:
+        #         active_pixels += virtual.pixel_count
+
+        # if segs[0] == "ledfx":
+        #     if payload == "HomeAssistant initialized":
+        #         virtual = self._ledfx.virtuals.get(
+        #             next(iter(self._ledfx.virtuals))
+        #         )
+        #         client.publish(
+        #             f"{self._discovery_topic("select")}/ledfxtransitiontype/state",
+        #             virtual.config["transition_mode"],
+        #         )
+        #         client.publish(
+        #             f"{self.discovery_topic}/number/ledfxtransitiontime/state",
+        #             virtual.config["transition_time"],
+        #         )
+        #         # PausedState
+        #         client.publish(
+        #             f"{self._discovery_topic("switch")}/ledfxplay/state",
+        #             paused_state,
+        #         )
+        #         # AudioSelector
+        #         client.publish(
+        #             f"{self._discovery_topic("select")}/ledfxaudio/state",
+        #             AudioInputSource.input_devices()[
+        #                 self._ledfx.config.get("audio", {}).get(
+        #                     "audio_device", {}
+        #                 )
+        #             ],
+        #         )
+        #         # Pixel-Sensor
+        #         client.publish(
+        #             f"{self.discovery_topic}/sensor/ledfxpixelsensor/state",
+        #             str(active_pixels) + " / " + str(total_pixels),
+        #         )
+        #         # publish all virtual data on connect (meta)
+        #         for virtual in self._ledfx.virtuals.values():
+        #             self._publish_virtual_config(virtual.id, client)
+        #             self._publish_virtual_paused(virtual.id, client)
+        #     return
 
         # React to SET commands
-        if segs[3] != "set":
-            return
-        virtualid = segs[2]
-
         # React to Global-PlayPause
         if virtualid == "ledfxplay":
             # _LOGGER.info("Paused: " + str(self._ledfx.virtuals._paused) + str(payload))
