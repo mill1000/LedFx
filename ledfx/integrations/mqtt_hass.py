@@ -1,8 +1,9 @@
 import json
 import logging
+import re
 import socket
 from dataclasses import dataclass
-from typing import Any, Optional, Callable
+from typing import Any, Callable, Optional
 
 import paho.mqtt.client as mqtt
 import voluptuous as vol
@@ -27,18 +28,6 @@ class EntityConfig:
     unique_id: str
     icon: str
     entity_category: Optional[str] = None
-
-
-command_template = """{
-    "state": "on"
-    {%- if red is defined and green is defined and blue is defined -%}
-    , "color": [{{ red }}, {{ green }}, {{ blue }}]
-    {%- endif -%}
-    {%- if effect is defined -%}
-    , "effect": "{{ effect }}"
-    {%- endif -%}
-}
-"""
 
 
 def extract_ip():
@@ -114,7 +103,7 @@ class MQTT_HASS(Integration):
         self._config = config
         self._client = None
         self._data = []
-        self._listeners = []
+        self._listeners = []  # TODO rename, these are ledfx listeners
 
         self._host = f"{extract_ip()}:{ledfx.port}"  # TODO hash this into a "unique" ID? or get MAC address?
 
@@ -125,7 +114,6 @@ class MQTT_HASS(Integration):
 
     def _add_mqtt_listener(self, topic_regex: str, callback: Callable):
         self._mqtt_listeners.append((re.compile(topic_regex), callback))
-
 
     def _discovery_topic(self, platform: str) -> str:
         return f"{self._discovery_prefix}/{platform}/ledfx"
@@ -250,6 +238,8 @@ class MQTT_HASS(Integration):
         )
         self._publish_select_discovery_config(
             "scene",
+            # TODO how to deal with scene updates
+            # TODO add "no scene" option?
             list(self._ledfx.scenes._scenes.keys()),
             scene_select,
         )
@@ -378,6 +368,7 @@ class MQTT_HASS(Integration):
 
     def _on_global_state_paused(self, event):
         # Was able to trigger
+        # TODO event should obviously have current paused state
         _LOGGER.warning("Global state updated %s", event)
         paused_state = "OFF" if self._ledfx.virtuals._paused else "ON"
         self._client.publish(
@@ -411,7 +402,7 @@ class MQTT_HASS(Integration):
 
         _LOGGER.warning("Publish virtual state %r", state)
         self._client.publish(
-            f"{self._state_prefix}/{virtual.id}/state",
+            f"{self._state_prefix}/virtuals/{virtual.id}/state",
             json.dumps(state)
         )
 
@@ -458,7 +449,7 @@ class MQTT_HASS(Integration):
             )
         )
 
-        # Useless event
+        # Useless event, when is an effect cleared but the virtual remains on?
         # self._listeners.append(
         #     self._ledfx.events.add_listener(
         #         self._on_virtual_update,
@@ -488,18 +479,68 @@ class MQTT_HASS(Integration):
 
         self._publish_discovery_config()
 
-        # Subscribe to all virtuals
-        self._client.subscribe(f"{self._state_prefix}/virtuals/#")
+        # Subscribe to all set topics for all entities and virtuals
+        self._client.subscribe(f"{self._state_prefix}/+/set")
+        self._client.subscribe(f"{self._state_prefix}/virtuals/+/set")
 
         # Add listener to catch all virtual set command
         self._add_mqtt_listener(rf"{self._state_prefix}/virtuals/(?P<virtual_id>[^/]+)/set", self._on_virtual_set)
+
+        # Add listner to catch any set command for basic entities
+        self._add_mqtt_listener(rf"{self._state_prefix}/(?P<entity>[^/]+)/set", self._on_entity_set)
 
         # client.publish(f"{self._state_prefix}/state", json.dumps{"initialized": true})
 
         # TODO should publish entire states on connect
         # but updates can be partial?
 
-    def _on_virtual_set(self, topic, payload, match):
+    def _on_entity_set(self, topic, payload, match) -> None:
+        """MQTT listener for set commands on base entities."""
+        _LOGGER.warning("Handling set for %s: %s", topic, payload)
+
+        # Get ID from RE match
+        entity = match.group('entity')
+
+        if entity == "pause":
+            self._ledfx.virtuals.pause_all()
+            return
+
+        if entity == "scene":
+            self._ledfx.scenes.activate(payload.decode())
+            return
+
+        if entity == "audio_source":
+            # TODO
+            # if hasattr(self._ledfx, "audio") and self._ledfx.audio is not None:
+            #     # index = self._ledfx.audio.get_device_index_by_name(payload)
+            #     index = -1
+            #     for key, value in AudioInputSource.input_devices().items():
+            #         if str(payload) == value:
+            #             index = key
+
+            #     new_config = self._ledfx.config.get("audio", {})
+            #     new_config["audio_device"] = int(index)
+            #     self._ledfx.config["audio"] = new_config
+            #     save_config(
+            #         config=self._ledfx.config,
+            #         config_dir=self._ledfx.config_dir,
+            #     )
+            #     self._ledfx.audio.update_config(new_config)
+            return
+
+    def _on_virtual_set(self, topic, payload, match) -> None:
+        """MQTT listener for set commands on virtuals
+        """
+        _LOGGER.warning("Handling virtual set for %s: %s", topic, payload)
+
+        # Parse incoming payload
+        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", topic, payload)
+        try:
+            payload = json.loads(payload)
+        except json.decoder.JSONDecodeError as e:
+            _LOGGER.error("Failed to parse payload '%s'. Error: %s", payload, e)
+            return
+
         # Get ID from RE match
         virtual_id = match.group('virtual_id')
 
@@ -509,7 +550,8 @@ class MQTT_HASS(Integration):
             _LOGGER.error("Received MQTT set for unknown virtual '%s'.", virtual_id)
             return
 
-        if state := payload.get("state")
+        if state := payload.get("state"):
+            # TODO cant activate without an effect configured!
             virtual.active = state == STATE_ON
 
         if effect := payload.get("effect"):
@@ -528,27 +570,18 @@ class MQTT_HASS(Integration):
         )
 
         # Sanity check incoming message is at the right prefix
-        prefix, *parts = msg.topic.split("/")
+        prefix, _ = msg.topic.split("/", maxsplit=1)
         if prefix != self._state_prefix:
             _LOGGER.warning("Received unexpected MQTT message at '%s'", msg.topic)
             return
 
-        # Parse incoming payload
-        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", msg.topic, msg.payload)
-        try:
-            payload = json.loads(msg.payload)
-        except json.decoder.JSONDecodeError as e:
-            _LOGGER.error("Failed to parse payload '%s'. Error: %s", msg.payload, e)
-            return
-
         # Make required callbacks
         for pattern, callback in self._mqtt_listeners:
-            if match := pattern.fullmatch(topic):
-                callback(topic, payload, match)
+            if match := pattern.fullmatch(msg.topic):
+                callback(msg.topic, msg.payload, match)
 
-    
+        # TODO want someway to know if there's an unhandled message
 
-        # TODO Need a map of entities -> objects, or someway to differential virtuals vs hardcoded entities like pause, selects, etc
         return
 
         # TODO this is the initial state push
@@ -606,22 +639,6 @@ class MQTT_HASS(Integration):
         #             self._publish_virtual_paused(virtual.id, client)
         #     return
 
-        # React to SET commands
-        # React to Global-PlayPause
-        if virtualid == "ledfxplay":
-            # _LOGGER.info("Paused: " + str(self._ledfx.virtuals._paused) + str(payload))
-            self._ledfx.virtuals.pause_all()
-            paused_state = "OFF"
-            if self._ledfx.virtuals._paused:
-                paused_state = "OFF"
-            else:
-                paused_state = "ON"
-            client.publish(
-                f"{self._discovery_topic("switch")}/{virtualid}/state",
-                paused_state,
-            )
-            return
-
         # React to Transition-Type
         if virtualid in self.TRANSITION_MAPPING.keys():
             # _LOGGER.info("Transitions: " + str(payload))
@@ -642,30 +659,6 @@ class MQTT_HASS(Integration):
 
             virtual.update_config({key: val})
             self._ledfx.config["global_transitions"] = prior_state
-
-        # React to Scene-Selector
-        elif virtualid == "ledfxsceneselect":
-            self._ledfx.scenes.activate(str(payload))
-
-        # React to Audio-Selector
-        elif virtualid == "ledfxaudio":
-            _LOGGER.debug("AUDIO DEVICE BROOOO: " + str(payload))
-            if hasattr(self._ledfx, "audio") and self._ledfx.audio is not None:
-                # index = self._ledfx.audio.get_device_index_by_name(payload)
-                index = -1
-                for key, value in AudioInputSource.input_devices().items():
-                    if str(payload) == value:
-                        index = key
-
-                new_config = self._ledfx.config.get("audio", {})
-                new_config["audio_device"] = int(index)
-                self._ledfx.config["audio"] = new_config
-                save_config(
-                    config=self._ledfx.config,
-                    config_dir=self._ledfx.config_dir,
-                )
-                self._ledfx.audio.update_config(new_config)
-            return
 
         # React to Virtuals
         elif isinstance(payload, dict):
@@ -810,14 +803,9 @@ class MQTT_HASS(Integration):
                     config_dir=self._ledfx.config_dir,
                 )
 
-        # client.publish(
-        #     f"{self._discovery_topic("light")}/{virtualid}/state",
-        #     msg.payload,
-        # )
-
     async def on_delete(self):
         """Integration is being removed from LedFx."""
-        # TODO clean up all published configs
+        # TODO clean up all published configs, these don't match new layout
         self._client.publish(
             f"{self._discovery_topic("light")}/ledfxscene/config", json.dumps({})
         )
