@@ -266,6 +266,7 @@ class MQTT_HASS(Integration):
 
         # Create light for each virtual segment
         for virtual in self._ledfx.virtuals.values():
+            # TODO are these valid?
             name = virtual.config["name"]
             if (
                 name.startswith("gap-")
@@ -370,7 +371,7 @@ class MQTT_HASS(Integration):
         # Was able to trigger
         # TODO event should obviously have current paused state
         _LOGGER.warning("Global state updated %s", event)
-        paused_state = "OFF" if self._ledfx.virtuals._paused else "ON"
+        paused_state = STATE_OFF if self._ledfx.virtuals._paused else STATE_ON
         self._client.publish(
             f"{self._state_prefix}/pause/state",
             paused_state,
@@ -427,9 +428,6 @@ class MQTT_HASS(Integration):
             + str(total_pixels)
         )
         # ToDo create sensor with total_pixels
-
-        # Internal State-Handler
-        client.subscribe(f"{self._state_prefix}/state")
 
         self._listeners.append(
             self._ledfx.events.add_listener(
@@ -488,8 +486,6 @@ class MQTT_HASS(Integration):
 
         # Add listner to catch any set command for basic entities
         self._add_mqtt_listener(rf"{self._state_prefix}/(?P<entity>[^/]+)/set", self._on_entity_set)
-
-        # client.publish(f"{self._state_prefix}/state", json.dumps{"initialized": true})
 
         # TODO should publish entire states on connect
         # but updates can be partial?
