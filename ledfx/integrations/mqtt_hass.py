@@ -506,40 +506,46 @@ class MQTT_HASS(Integration):
             return
 
         if entity == "scene":
-            self._ledfx.scenes.activate(payload.decode())
+            new_scene = payload.decode()
+
+            # TODO are we passing names or IDs?
+            if new_scene not in self._ledfx.config["scenes"].keys():
+                _LOGGER.error("Unknown scene '%s'.", new_scene)
+                return
+
+            self._ledfx.scenes.activate(new_scene)
             return
 
         if entity == "audio_source":
-            # TODO
-            # if hasattr(self._ledfx, "audio") and self._ledfx.audio is not None:
-            #     # index = self._ledfx.audio.get_device_index_by_name(payload)
-            #     index = -1
-            #     for key, value in AudioInputSource.input_devices().items():
-            #         if str(payload) == value:
-            #             index = key
+            # Find selected source
+            new_source = payload.decode()
+            index = next((
+                index
+                for index, name in AudioInputSource.input_devices().items()
+                if name == new_source
+            ), None)
 
-            #     new_config = self._ledfx.config.get("audio", {})
-            #     new_config["audio_device"] = int(index)
-            #     self._ledfx.config["audio"] = new_config
-            #     save_config(
-            #         config=self._ledfx.config,
-            #         config_dir=self._ledfx.config_dir,
-            #     )
-            #     self._ledfx.audio.update_config(new_config)
+            if not index:
+                _LOGGER.error("Unknown audio source '%s'.", new_source)
+                return
+
+            # Update and save config
+            new_config = self._ledfx.config.get("audio", {})
+            new_config["device_index"] = index
+            self._ledfx.config["audio"] = new_config
+
+            save_config(
+                config=self._ledfx.config,
+                config_dir=self._ledfx.config_dir,
+            )
+
+            if self._ledfx.audio:
+                self._ledfx.audio.update_config(new_config)
             return
 
     def _on_virtual_set(self, topic, payload, match) -> None:
-        """MQTT listener for set commands on virtuals
-        """
+        """MQTT listener for set commands on virtuals"""
         _LOGGER.warning("Handling virtual set for %s: %s", topic, payload)
-
-        # Parse incoming payload
-        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", topic, payload)
-        try:
-            payload = json.loads(payload)
-        except json.decoder.JSONDecodeError as e:
-            _LOGGER.error("Failed to parse payload '%s'. Error: %s", payload, e)
-            return
 
         # Get ID from RE match
         virtual_id = match.group('virtual_id')
@@ -550,15 +556,59 @@ class MQTT_HASS(Integration):
             _LOGGER.error("Received MQTT set for unknown virtual '%s'.", virtual_id)
             return
 
+        # Parse incoming payload
+        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", topic, payload)
+        try:
+            payload = json.loads(payload)
+        except json.decoder.JSONDecodeError as e:
+            _LOGGER.error("Failed to parse payload '%s'. Error: %s", payload, e)
+            return
+
+        if color := payload.get("color"):
+            # Specific color requested
+            effect = self._ledfx.effects.create(
+                ledfx=self._ledfx,
+                type="singleColor",  # TODO better way to get type?
+                config={"color": color.values()},
+            )
+            virtual.set_effect(effect)
+
+        if effect := payload.get("effect"):
+            effect_id = next((
+                id
+                for id, name in self._ledfx.effects.classes()
+                if name == effect
+            ), None)
+
+            if not effect_id:
+                _LOGGER.error("Unknown effect '%s'.", effect)
+                return
+
+            effect = self._ledfx.effects.create(
+                ledfx=self._ledfx,
+                type=effect_id,
+                config=virtual.get_effects_config(effect_id)
+            )
+
+            # TODO probably need to try/except
+            virtual.set_effect(effect)
+
+            # Update effect config? Did we change it?
+            virtual.update_effect_config(effect)
+
+            save_config(
+                config=self._ledfx.config,
+                config_dir=self._ledfx.config_dir,
+            )
+
+        if brightness := payload.get(brightness):
+            if effect := virtual.active_effect
+            effect.brightness = float(brightness) / 100.0
+            # TODO update config?
+
         if state := payload.get("state"):
             # TODO cant activate without an effect configured!
             virtual.active = state == STATE_ON
-
-        if effect := payload.get("effect"):
-            # TODO get effect from [e.NAME for e in self._ledfx.effects.classes().values()],
-            # effects.create_effect() w/ empty config?
-            # virtual.set_effect
-            pass
 
     def _on_mqtt_message(self, client, userdata, msg) -> None:
         """MQTT callback when messages are received."""
@@ -639,169 +689,27 @@ class MQTT_HASS(Integration):
         #             self._publish_virtual_paused(virtual.id, client)
         #     return
 
+        # TODO transitions?
         # React to Transition-Type
-        if virtualid in self.TRANSITION_MAPPING.keys():
-            # _LOGGER.info("Transitions: " + str(payload))
-            prior_state = self._ledfx.config["global_transitions"]
-            self._ledfx.config["global_transitions"] = True
-            virtual = self._ledfx.virtuals.get(
-                next(iter(self._ledfx.virtuals))
-            )
-            key = self.TRANSITION_MAPPING[virtualid]
-            if key == "transition_time":
-                try:
-                    val = float(payload)
-                except ValueError as e:
-                    _LOGGER.warning(e)
-                    val = 0.5
-            else:
-                val = payload
+        # if virtualid in self.TRANSITION_MAPPING.keys():
+        #     # _LOGGER.info("Transitions: " + str(payload))
+        #     prior_state = self._ledfx.config["global_transitions"]
+        #     self._ledfx.config["global_transitions"] = True
+        #     virtual = self._ledfx.virtuals.get(
+        #         next(iter(self._ledfx.virtuals))
+        #     )
+        #     key = self.TRANSITION_MAPPING[virtualid]
+        #     if key == "transition_time":
+        #         try:
+        #             val = float(payload)
+        #         except ValueError as e:
+        #             _LOGGER.warning(e)
+        #             val = 0.5
+        #     else:
+        #         val = payload
 
-            virtual.update_config({key: val})
-            self._ledfx.config["global_transitions"] = prior_state
-
-        # React to Virtuals
-        elif isinstance(payload, dict):
-            virtual = self._ledfx.virtuals.get(virtualid, None)
-            if virtual:
-                # SET VIRTUAL COLOR AND ACTIVE
-                color = payload.get("effect", "orange")
-                color = payload.get("color", None)
-
-                if color is not None:
-                    effect = self._ledfx.effects.create(
-                        ledfx=self._ledfx,
-                        type="singleColor",
-                        config={"color": color},
-                    )
-                    try:
-                        virtual.set_effect(effect)
-                        virtual.active = payload.get("state", "off") == "on"
-
-                    except (ValueError, RuntimeError) as msg:
-                        _LOGGER.warning(msg)
-                else:
-                    _LOGGER.debug("COLOR: %s", color)
-                    # effect = self._ledfx.effects.create(
-                    #     ledfx=self._ledfx,
-                    #     type="singleColor",
-                    #     config={"color": "orange"},
-                    # )
-
-                # Handle effect selection
-                selected_effect_or_preset = payload.get("effect")
-                if selected_effect_or_preset:
-                    if selected_effect_or_preset == "back":
-                        effect_list = list(
-                            self._ledfx.effects.classes().keys()
-                        )
-                    elif (
-                        selected_effect_or_preset
-                        in self._ledfx.effects.classes().keys()
-                    ):
-                        # If an effect is selected, show its presets
-                        ledfx_presets = self._ledfx.config.get(
-                            "ledfx_presets", {}
-                        ).get(selected_effect_or_preset, {})
-                        user_presets = self._ledfx.config.get(
-                            "user_presets", {}
-                        ).get(selected_effect_or_preset, {})
-                        effect_list = (
-                            ["back"]
-                            + list(ledfx_presets.keys())
-                            + list(user_presets.keys())
-                        )
-                        effect = self._ledfx.effects.create(
-                            ledfx=self._ledfx,
-                            type=selected_effect_or_preset,
-                            config=payload.get("effect_config", {}),
-                        )
-                        virtual.set_effect(effect)
-                    else:
-                        # If a preset is selected, apply it
-                        ledfx_presets = self._ledfx.config.get(
-                            "ledfx_presets", {}
-                        ).get(getattr(virtual.active_effect, "type", ""), {})
-                        user_presets = self._ledfx.config.get(
-                            "user_presets", {}
-                        ).get(getattr(virtual.active_effect, "type", ""), {})
-                        preset_config = ledfx_presets.get(
-                            selected_effect_or_preset
-                        ) or user_presets.get(selected_effect_or_preset)
-                        effect_list = (
-                            ["back"]
-                            + list(ledfx_presets.keys())
-                            + list(user_presets.keys())
-                        )
-                        if preset_config:
-                            effect = self._ledfx.effects.create(
-                                ledfx=self._ledfx,
-                                type=virtual.active_effect.type,
-                                config=preset_config["config"],
-                            )
-                            virtual.set_effect(effect)
-                        return
-                    name = virtual.config["name"]
-                    if (
-                        name.startswith("gap-")
-                        or name.endswith("-background")
-                        or name.endswith("-mask")
-                        or name.endswith("-foreground")
-                    ):
-                        return
-
-                    if virtual.config["icon_name"].startswith("mdi:"):
-                        icon = virtual.config["icon_name"]
-                    else:
-                        icon = "mdi:led-strip"
-                    hass_device = {
-                        "identifiers": ["yzlights"],
-                        "configuration_url": f"http://{extract_ip()}:{self._ledfx.port}/#/Integrations",
-                        "name": "LedFx",
-                        "model": "BladeMOD",
-                        "manufacturer": "Yeon",
-                        "sw_version": f"{PROJECT_VERSION}",
-                    }
-                    client.publish(
-                        f"{self._discovery_topic("light")}/{virtual.id}/config",
-                        json.dumps(
-                            {
-                                "~": f"{self._discovery_topic("light")}/{virtual.id}",
-                                "name": "⮑ " + name,
-                                "unique_id": virtual.id,
-                                "cmd_t": "~/set",
-                                "stat_t": "~/state",
-                                "state_template": "{{ value_json.state | lower }}",
-                                "state_value_template": "{{ value_json.state | lower }}",
-                                "schema": "template",
-                                "brightness": False,
-                                "enabled_by_default": True,
-                                "command_on_template": command_template,
-                                "command_off_template": '{"state": "off"}',
-                                "red_template": "{{ value_json.color[0] }}",
-                                "green_template": "{{ value_json.color[1] }}",
-                                "blue_template": "{{ value_json.color[2] }}",
-                                "effect_template": "{{ value_json.effect }}",
-                                "json_attributes_topic": "~/meta",
-                                "icon": icon,
-                                "effect": True,
-                                # "effect_list": list(COLORS.keys()),
-                                "effect_list": effect_list,
-                                "device": hass_device,
-                            }
-                        ),
-                    )
-
-                # TODO: Stare at this to convince self, not writing unit test for this
-                virtual.virtual_cfg["active"] = virtual.active
-                virtual.virtual_cfg["effect"] = {}
-                virtual.virtual_cfg["effect"]["type"] = "singleColor"
-                virtual.virtual_cfg["effect"]["config"] = {"color": color}
-
-                save_config(
-                    config=self._ledfx.config,
-                    config_dir=self._ledfx.config_dir,
-                )
+        #     virtual.update_config({key: val})
+        #     self._ledfx.config["global_transitions"] = prior_state
 
     async def on_delete(self):
         """Integration is being removed from LedFx."""
