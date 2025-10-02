@@ -13,6 +13,7 @@ from ledfx.config import save_config
 from ledfx.consts import PROJECT_VERSION
 from ledfx.effects.audio import AudioInputSource
 from ledfx.effects.singleColor import SingleColorEffect
+from ledfx.effects import DummyEffect
 from ledfx.events import Event
 from ledfx.integrations import Integration
 
@@ -541,7 +542,7 @@ class MQTT_HASS(Integration):
 
     def _on_virtual_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on virtuals"""
-        _LOGGER.warning("Handling virtual set for %s: %s", topic, payload)
+        _LOGGER.warning("Virtual set for %s: %s", topic, payload)
 
         # Get ID from RE match
         virtual_id = match.group('virtual_id')
@@ -549,11 +550,10 @@ class MQTT_HASS(Integration):
         # Grab the virtual
         virtual = self._ledfx.virtuals.get(virtual_id, None)
         if not virtual:
-            _LOGGER.error("Received MQTT set for unknown virtual '%s'.", virtual_id)
+            _LOGGER.error("Unknown virtual '%s'.", virtual_id)
             return
 
-        # Parse incoming payload
-        _LOGGER.warning("Parsing MQTT topic '%s' payload '%s'", topic, payload)
+        # Parse JSON payload
         try:
             payload = json.loads(payload)
         except json.decoder.JSONDecodeError as e:
@@ -565,15 +565,16 @@ class MQTT_HASS(Integration):
             effect = self._ledfx.effects.create(
                 ledfx=self._ledfx,
                 type="singleColor",  # TODO better way to get type?
-                config={"color": color.values()},
+                config={"color": f"#{color["r"]:02x}{color["g"]:02x}{color["b"]:02x}"},
             )
             virtual.set_effect(effect)
 
         if effect := payload.get("effect"):
+            # Set provided effect
             effect_id = next((
                 id
-                for id, name in self._ledfx.effects.classes()
-                if name == effect
+                for id, cls in self._ledfx.effects.classes().items()
+                if cls.NAME == effect
             ), None)
 
             if not effect_id:
@@ -597,13 +598,36 @@ class MQTT_HASS(Integration):
                 config_dir=self._ledfx.config_dir,
             )
 
-        if brightness := payload.get(brightness):
-            if effect := virtual.active_effect
-            effect.brightness = float(brightness) / 100.0
-            # TODO update config?
+        if brightness := payload.get("brightness"):
+            # Set effect brightness
+            if effect := virtual.active_effect:
+                effect.brightness = float(brightness) / 100.0
+                # TODO?
+                #virtual.update_effect_config(effect)
 
         if state := payload.get("state"):
-            # TODO cant activate without an effect configured!
+            # Virtual can't be activated without an effect
+            # So first try to restore the previous, then fallback to solid color
+            if not virtual.active_effect or isinstance(virtual.active_effect, DummyEffect):
+                if ((last_effect := virtual.virtual_cfg.get("last_effect")) and 
+                    (effect_config := virtual.get_effects_config(last_effect))):
+                    # Set previous effect
+                    effect = self._ledfx.effects.create(
+                        ledfx=self._ledfx,
+                        type=last_effect,
+                        config=effect_config,
+                    )
+                else:
+                     # Fall back to a color
+                    effect = self._ledfx.effects.create(
+                        ledfx=self._ledfx,
+                        type="singleColor",  # TODO better way to get type?
+                        config={"color": "orange"}, # Orange because WLED does it
+                    )
+            
+                virtual.set_effect(effect)
+                virtual.update_effect_config(effect)
+
             virtual.active = state == STATE_ON
 
     def _on_mqtt_message(self, client, userdata, msg) -> None:
