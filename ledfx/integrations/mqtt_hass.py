@@ -462,65 +462,22 @@ class MQTT_HASS(Integration):
         )
 
     def _setup_ledfx_listeners(self) -> None:
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._on_scene_activated, Event.SCENE_ACTIVATED,
+        EVENT_HANDLERS = {
+            Event.SCENE_ACTIVATED: self._on_scene_activated,
+            Event.EFFECT_SET: self._on_virtual_update,
+            # Event.EFFECT_UPDATED: self._on_virtual_update,
+            Event.VIRTUAL_PAUSE: self._on_virtual_update,
+            # Event.EFFECT_CLEARED: self._on_virtual_update # Useless event, when is an effect cleared but the virtual remains on?
+            Event.VIRTUAL_CONFIG_UPDATE: self._on_virtual_config_update,
+            Event.GLOBAL_PAUSE: self._on_global_state_paused,
+            # Event.AUDIO_INPUT_DEVICE_CHANGED: self._on_audio_source_changed # Event is broken
+            Event.BASE_CONFIG_UPDATE: self._on_system_config_update,
+        }
+
+        for event, handler in EVENT_HANDLERS:
+            self._listeners.append(
+                self._ledfx.events.add_listener(handler, event)
             )
-        )
-
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._on_virtual_update, Event.EFFECT_SET,
-            )
-        )
-
-        # self._listeners.append(
-        #     self._ledfx.events.add_listener(
-        #         self._on_virtual_update, Event.EFFECT_UPDATED,
-        #     )
-        # )
-
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._on_virtual_update, Event.VIRTUAL_PAUSE
-            )
-        )
-
-        # Useless event, when is an effect cleared but the virtual remains on?
-        # self._listeners.append(
-        #     self._ledfx.events.add_listener(
-        #         self._on_virtual_update,
-        #         Event.EFFECT_CLEARED,
-        #     )
-        # )
-
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._on_virtual_config_update,
-                Event.VIRTUAL_CONFIG_UPDATE,
-            )
-        )
-
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._on_global_state_paused, Event.GLOBAL_PAUSE
-            )
-        )
-
-        # Event is broken, config
-        # self._listeners.append(
-        #     self._ledfx.events.add_listener(
-        #         self._on_audio_source_changed,
-        #         Event.AUDIO_INPUT_DEVICE_CHANGED,
-        #     )
-        # )
-
-        self._listeners.append(
-            self._ledfx.events.add_listener(
-                self._on_system_config_update,
-                Event.BASE_CONFIG_UPDATE,
-            )
-        )
 
     def _on_mqtt_connect(self, client, userdata, flags, rc) -> None:
         """MQTT callback when we connect to the broker."""
