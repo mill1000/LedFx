@@ -563,7 +563,7 @@ class MQTT_HASS(Integration):
 
     def _on_entity_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on base entities."""
-        _LOGGER.warning("Handling set for %s: %s", topic, payload)
+        _LOGGER.warning("Set for %s: %s", topic, payload)
 
         # Get ID from RE match
         entity = match.group('entity')
@@ -673,14 +673,14 @@ class MQTT_HASS(Integration):
             if effect := virtual.active_effect:
                 effect.brightness = float(brightness) / 100.0
                 # TODO?
-                #virtual.update_effect_config(effect)
+                # virtual.update_effect_config(effect)
 
         if state := payload.get("state"):
             # Virtual can't be activated without an effect
             # So first try to restore the previous, then fallback to solid color
             if not virtual.active_effect or isinstance(virtual.active_effect, DummyEffect):
-                if ((last_effect := virtual.virtual_cfg.get("last_effect")) and 
-                    (effect_config := virtual.get_effects_config(last_effect))):
+                if ((last_effect := virtual.virtual_cfg.get("last_effect")) and
+                        (effect_config := virtual.get_effects_config(last_effect))):
                     # Set previous effect
                     effect = self._ledfx.effects.create(
                         ledfx=self._ledfx,
@@ -688,13 +688,13 @@ class MQTT_HASS(Integration):
                         config=effect_config,
                     )
                 else:
-                     # Fall back to a color
+                    # Fall back to a color
                     effect = self._ledfx.effects.create(
                         ledfx=self._ledfx,
                         type="singleColor",  # TODO better way to get type?
-                        config={"color": "orange"}, # Orange because WLED does it
+                        config={"color": "orange"},  # Orange because WLED does it
                     )
-            
+
                 virtual.set_effect(effect)
                 virtual.update_effect_config(effect)
 
