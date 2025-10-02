@@ -392,7 +392,6 @@ class MQTT_HASS(Integration):
                 json.dumps(virtual.config),
             )
 
-
     def _on_virtual_config_update(self, event):
         # Event on settings change but not edit device
         _LOGGER.warning("Virtual config update event %s fosr %s", event, event.virtual_id)
@@ -458,28 +457,7 @@ class MQTT_HASS(Integration):
             json.dumps(state)
         )
 
-    def _on_mqtt_connect(self, client, userdata, flags, rc) -> None:
-        """MQTT callback when we connect to the broker."""
-        # Save client now that we're online
-        self._client = client
-
-        total_pixels = 0
-        for device in self._ledfx.devices.values():
-            total_pixels += device.pixel_count
-
-        active_pixels = 0
-        for virtual in self._ledfx.virtuals.values():
-            if virtual.active:
-                active_pixels += virtual.pixel_count
-
-        _LOGGER.debug(
-            "active_pixels/total_pixels:"
-            + str(active_pixels)
-            + "/"
-            + str(total_pixels)
-        )
-        # ToDo create sensor with total_pixels
-
+    def _setup_ledfx_listeners(self) -> None:
         self._listeners.append(
             self._ledfx.events.add_listener(
                 self._on_scene_activated, Event.SCENE_ACTIVATED,
@@ -491,6 +469,12 @@ class MQTT_HASS(Integration):
                 self._on_virtual_update, Event.EFFECT_SET,
             )
         )
+
+        # self._listeners.append(
+        #     self._ledfx.events.add_listener(
+        #         self._on_virtual_update, Event.EFFECT_UPDATED,
+        #     )
+        # )
 
         self._listeners.append(
             self._ledfx.events.add_listener(
@@ -534,6 +518,33 @@ class MQTT_HASS(Integration):
             )
         )
 
+    def _on_mqtt_connect(self, client, userdata, flags, rc) -> None:
+        """MQTT callback when we connect to the broker."""
+        # Save client now that we're online
+        self._client = client
+
+        total_pixels = 0
+        for device in self._ledfx.devices.values():
+            total_pixels += device.pixel_count
+
+        active_pixels = 0
+        for virtual in self._ledfx.virtuals.values():
+            if virtual.active:
+                active_pixels += virtual.pixel_count
+
+        # TODO when would this sensor be updated? e.g. what event?
+        _LOGGER.warning(
+            "active_pixels/total_pixels:"
+            + str(active_pixels)
+            + "/"
+            + str(total_pixels)
+        )
+        # ToDo create sensor with total_pixels
+
+        # Setup event listeners
+        self._setup_ledfx_listeners()
+
+        # Publish HA discovery configs
         self._publish_discovery_config()
 
         # Subscribe to all set topics for all entities and virtuals
