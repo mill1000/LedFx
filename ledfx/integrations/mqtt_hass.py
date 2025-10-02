@@ -441,8 +441,7 @@ class MQTT_HASS(Integration):
         }
 
         if event.event_type == Event.EFFECT_SET:
-            effect = virtual.active_effect
-            if effect:
+            if effect := virtual.active_effect:
                 state["effect"] = effect.name
                 state["brightness"] = 100 * effect.brightness
                 if effect.name == SingleColorEffect.NAME:
