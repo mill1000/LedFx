@@ -134,15 +134,16 @@ class MQTT_HASS(Integration):
         """Publish a sensor component discovery config."""
         discovery_config = {
             "name": config.name,
-            "unique_id": config.unique_id,
-            "icon": config.icon,
-            "device": self._hass_device,
+            "uniq_id": config.unique_id,
+            "ic": config.icon,
+            "dev": self._hass_device,
             "~": f"{self._state_prefix}/{sensor}",
             "stat_t": "~/state",
+            "avty_t": f"{self._state_prefix}/mqtt",
         }
 
         if category := config.entity_category:
-            discovery_config["entity_category"] = category
+            discovery_config["ent_cat"] = category
 
         self._client.publish(
             f"{self._discovery_topic("sensor")}/{sensor}/config",
@@ -153,17 +154,18 @@ class MQTT_HASS(Integration):
         """Publish a select component discovery config."""
         discovery_config = {
             "name": config.name,
-            "unique_id": config.unique_id,
-            "icon": config.icon,
-            "device": self._hass_device,
+            "uniq_id": config.unique_id,
+            "ic": config.icon,
+            "dev": self._hass_device,
             "~": f"{self._state_prefix}/{select}",
             "cmd_t": "~/set",
             "stat_t": "~/state",
+            "avty_t": f"{self._state_prefix}/mqtt",
             "options": options,
         }
 
         if category := config.entity_category:
-            discovery_config["entity_category"] = category
+            discovery_config["ent_cat"] = category
 
         self._client.publish(
             f"{self._discovery_topic("select")}/{select}/config",
@@ -174,16 +176,17 @@ class MQTT_HASS(Integration):
         """Publish a switch component discovery config."""
         discovery_config = {
             "name": config.name,
-            "unique_id": config.unique_id,
-            "icon": config.icon,
-            "device": self._hass_device,
+            "uniq_id": config.unique_id,
+            "ic": config.icon,
+            "dev": self._hass_device,
             "~": f"{self._state_prefix}/{switch}",
             "cmd_t": "~/set",
             "stat_t": "~/state",
+            "avty_t": f"{self._state_prefix}/mqtt",
         }
 
         if category := config.entity_category:
-            discovery_config["entity_category"] = category
+            discovery_config["ent_cat"] = category
 
         self._client.publish(
             f"{self._discovery_topic("switch")}/{switch}/config",
@@ -194,26 +197,27 @@ class MQTT_HASS(Integration):
         """Publish a light component discovery config."""
         discovery_config = {
             "name": config.name,
-            "unique_id": config.unique_id,
-            "icon": config.icon,
-            "device": self._hass_device,
+            "uniq_id": config.unique_id,
+            "ic": config.icon,
+            "dev": self._hass_device,
             "~": f"{self._state_prefix}/virtuals/{light}",
             "cmd_t": "~/set",
             "stat_t": "~/state",
+            "avty_t": f"{self._state_prefix}/mqtt",
             "schema": "json",
             "brightness": True,
-            "brightness_scale": 100,
+            "bri_scl": 100,
             "effect": True if len(effects) > 0 else False,
-            "effect_list": effects,
-            "flash": False,
-            "json_attributes_topic": "~/attributes",
-            "supported_color_modes": ["rgb"],  # TODO
+            "fx_list": effects,
+            "flsh": False,
+            "json_attr_t": "~/attributes",
+            "sup_clrm": ["rgb"],  # TODO
             # TODO transition?
             # TODO white scale?
         }
 
         if category := config.entity_category:
-            discovery_config["entity_category"] = category
+            discovery_config["ent_cat"] = category
 
         self._client.publish(
             f"{self._discovery_topic("light")}/{light}/config",
@@ -559,7 +563,7 @@ class MQTT_HASS(Integration):
         self._publish_initial_state()
 
         # Set connected state for HA availability
-        self._client.publish(f"{self._state_prefix}/mqtt", "connected")
+        self._client.publish(f"{self._state_prefix}/mqtt", "online")
 
     def _on_entity_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on base entities."""
@@ -859,7 +863,7 @@ class MQTT_HASS(Integration):
         # Stop client if present
         if self._client:
 
-            self._client.publish(f"{self._state_prefix}/mqtt", "disconnected")
+            self._client.publish(f"{self._state_prefix}/mqtt", "offline")
             self._client.loop_stop()
             self._client = None
 
@@ -872,7 +876,7 @@ class MQTT_HASS(Integration):
         client.on_connect = self._on_mqtt_connect
         client.on_message = self._on_mqtt_message
 
-        client.will_set(f"{self._state_prefix}/mqtt", "disconnected")
+        client.will_set(f"{self._state_prefix}/mqtt", "offline")
 
         if self._config["username"] is not None:
             client.username_pw_set(
