@@ -399,7 +399,7 @@ class MQTT_HASS(Integration):
 
         virtual = self._ledfx.virtuals.get(event.virtual_id)
         self._client.publish(
-            f"{self._state_prefix}/{event.virtual_id}/attributes",
+            f"{self._state_prefix}/virtuals/{event.virtual_id}/attributes",
             json.dumps(virtual.config),
         )
 
