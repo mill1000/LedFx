@@ -522,13 +522,13 @@ class MQTT_HASS(Integration):
                 if name == new_source
             ), None)
 
-            if not index:
+            if index is None:
                 _LOGGER.error("Unknown audio source '%s'.", new_source)
                 return
 
             # Update and save config
             new_config = self._ledfx.config.get("audio", {})
-            new_config["device_index"] = index
+            new_config["audio_device"] = index
             self._ledfx.config["audio"] = new_config
 
             save_config(
