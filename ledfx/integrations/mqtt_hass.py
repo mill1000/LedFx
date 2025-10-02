@@ -551,13 +551,12 @@ class MQTT_HASS(Integration):
         self._client.subscribe(f"{self._state_prefix}/+/set")
         self._client.subscribe(f"{self._state_prefix}/virtuals/+/set")
 
-        # Add listener to catch all virtual set command
+        # Add listener to catch all set commands for all virtuals and entities
+        self._add_mqtt_listener(rf"{self._state_prefix}/(?P<entity>[^/]+)/set", self._on_entity_set)
         self._add_mqtt_listener(rf"{self._state_prefix}/virtuals/(?P<virtual_id>[^/]+)/set", self._on_virtual_set)
 
-        # Add listner to catch any set command for basic entities
-        self._add_mqtt_listener(rf"{self._state_prefix}/(?P<entity>[^/]+)/set", self._on_entity_set)
-
-        self._publish_initial_state();
+        # Publish initial states
+        self._publish_initial_state()
 
         # TODO should publish entire states on connect
         # but updates can be partial?
