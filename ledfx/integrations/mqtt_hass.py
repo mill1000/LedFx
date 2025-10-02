@@ -424,10 +424,9 @@ class MQTT_HASS(Integration):
         # Was able to trigger
         # TODO event should obviously have current paused state
         _LOGGER.warning("Global state updated %s", event)
-        paused_state = STATE_OFF if self._ledfx.virtuals._paused else STATE_ON
         self._client.publish(
             f"{self._state_prefix}/pause/state",
-            paused_state,
+            STATE_OFF if self._ledfx.virtuals._paused else STATE_ON,
         )
 
     def _on_virtual_update(self, event):
