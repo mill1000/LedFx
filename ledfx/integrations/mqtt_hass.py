@@ -558,8 +558,8 @@ class MQTT_HASS(Integration):
         # Publish initial states
         self._publish_initial_state()
 
-        # TODO should publish entire states on connect
-        # but updates can be partial?
+        # Set connected state for HA availability
+        self._client.publish(f"{self._state_prefix}/mqtt", "connected")
 
     def _on_entity_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on base entities."""
@@ -858,6 +858,8 @@ class MQTT_HASS(Integration):
 
         # Stop client if present
         if self._client:
+
+            self._client.publish(f"{self._state_prefix}/mqtt", "disconnected")
             self._client.loop_stop()
             self._client = None
 
@@ -869,6 +871,8 @@ class MQTT_HASS(Integration):
         client = mqtt.Client()
         client.on_connect = self._on_mqtt_connect
         client.on_message = self._on_mqtt_message
+
+        client.will_set(f"{self._state_prefix}/mqtt", "disconnected")
 
         if self._config["username"] is not None:
             client.username_pw_set(
