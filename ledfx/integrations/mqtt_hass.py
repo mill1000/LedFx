@@ -403,12 +403,13 @@ class MQTT_HASS(Integration):
             json.dumps(virtual.config),
         )
 
-    def _on_audio_source_changed(self, event):
-        # Can't trigger?
-        _LOGGER.warning("Audio source changed event %s", event)
+    def _on_system_config_update(self, event):
+        _LOGGER.warning("System config event %s", event)
+
+        # Send potentially updated audio device
         self._client.publish(
             f"{self._state_prefix}/audio_source/state",
-            event.audio_input_device_name,
+            self._get_audio_source(),
         )
 
     def _on_scene_activated(self, event):
@@ -520,10 +521,18 @@ class MQTT_HASS(Integration):
             )
         )
 
+        # Event is broken, config
+        # self._listeners.append(
+        #     self._ledfx.events.add_listener(
+        #         self._on_audio_source_changed,
+        #         Event.AUDIO_INPUT_DEVICE_CHANGED,
+        #     )
+        # )
+
         self._listeners.append(
             self._ledfx.events.add_listener(
-                self._on_audio_source_changed,
-                Event.AUDIO_INPUT_DEVICE_CHANGED,
+                self._on_system_config_update,
+                Event.BASE_CONFIG_UPDATE,
             )
         )
 
