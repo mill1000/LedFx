@@ -342,6 +342,57 @@ class MQTT_HASS(Integration):
         #     ),
         # )
 
+    def _get_audio_source(self) -> str:
+        audio_config = self._ledfx.config.get("audio", {})
+        index = audio_config.get("audio_device", AudioInputSource.default_device_index())
+        return AudioInputSource.input_devices()[index]
+
+    def _publish_initial_state(self) -> None:
+
+        # TODO There's no such thing as an active "scene"
+
+        # Audio source
+        self._client.publish(
+            f"{self._state_prefix}/audio_source/state",
+            self._get_audio_source(),
+        )
+
+        # Global pause state
+        self._client.publish(
+            f"{self._state_prefix}/pause/state",
+            STATE_OFF if self._ledfx.virtuals._paused else STATE_ON,
+        )
+
+        # Publish each virtual
+        for virtual in self._ledfx.virtuals.values():
+            state = {
+                "state": STATE_ON if virtual.active else STATE_OFF
+            }
+
+            if effect := virtual.active_effect:
+                state["effect"] = effect.name
+                state["brightness"] = 100 * effect.brightness
+                if effect.name == SingleColorEffect.NAME:
+                    color = parse_color(effect.config["color"])
+                    state["color"] = {
+                        "r": color.red,
+                        "g": color.green,
+                        "b": color.blue
+                    }
+                    state["color_mode"] = "rgb"  # TODO color ignored if no color_mode?
+
+            _LOGGER.warning("Publish virtual state %r", state)
+            self._client.publish(
+                f"{self._state_prefix}/virtuals/{virtual.id}/state",
+                json.dumps(state)
+            )
+
+            self._client.publish(
+                f"{self._state_prefix}/virtuals/{virtual.id}/attributes",
+                json.dumps(virtual.config),
+            )
+
+
     def _on_virtual_config_update(self, event):
         # Event on settings change but not edit device
         _LOGGER.warning("Virtual config update event %s fosr %s", event, event.virtual_id)
@@ -487,6 +538,8 @@ class MQTT_HASS(Integration):
 
         # Add listner to catch any set command for basic entities
         self._add_mqtt_listener(rf"{self._state_prefix}/(?P<entity>[^/]+)/set", self._on_entity_set)
+
+        self._publish_initial_state();
 
         # TODO should publish entire states on connect
         # but updates can be partial?
