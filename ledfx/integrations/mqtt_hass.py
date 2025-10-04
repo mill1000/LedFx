@@ -474,7 +474,7 @@ class MQTT_HASS(Integration):
             Event.BASE_CONFIG_UPDATE: self._on_system_config_update,
         }
 
-        for event, handler in EVENT_HANDLERS:
+        for event, handler in EVENT_HANDLERS.items():
             self._listeners.append(
                 self._ledfx.events.add_listener(handler, event)
             )
