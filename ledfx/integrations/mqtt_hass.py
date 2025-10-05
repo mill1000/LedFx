@@ -702,14 +702,19 @@ class MQTT_HASS(Integration):
                 json.dumps({}),
             )
 
-    def on_shutdown(self) -> None:
-        """LedFx is shutting down. Perform necessary cleanup."""
-        # TODO set availablity of entities?
-
-        # TODO Stop client if present?
+    def _stop(self) -> None:
+        """Stop the integration and close the client."""
         if self._client:
+            # Update availability topic
+            self._client.publish(f"{self._state_prefix}/mqtt", "offline")
+
+            # Stop and remove client
             self._client.loop_stop()
             self._client = None
+
+    def on_shutdown(self) -> None:
+        """LedFx is shutting down. Perform necessary cleanup."""
+        self._stop()
 
     async def disconnect(self) -> None:
         """Integration disabled. Disconnect from MQTT."""
@@ -719,13 +724,9 @@ class MQTT_HASS(Integration):
             remove_listener()
         self._listeners.clear()
 
-        # Stop client if present
-        if self._client:
-
-            self._client.publish(f"{self._state_prefix}/mqtt", "offline")
-            self._client.loop_stop()
-            self._client = None
-
+        # Stop client
+        self._stop()
+        
         # Ensure super is called
         await super().disconnect()
 
