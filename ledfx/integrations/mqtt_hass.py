@@ -347,14 +347,13 @@ class MQTT_HASS(Integration):
         # )
 
     def _get_audio_source(self) -> str:
+        """Get the current audio source."""
         audio_config = self._ledfx.config.get("audio", {})
         index = audio_config.get("audio_device", AudioInputSource.default_device_index())
         return AudioInputSource.input_devices()[index]
 
     def _publish_initial_state(self) -> None:
-
-        # TODO There's no such thing as an active "scene"
-
+        """Publish initial state to MQTT."""
         # Audio source
         self._client.publish(
             f"{self._state_prefix}/audio_source/state",
@@ -395,11 +394,10 @@ class MQTT_HASS(Integration):
                 f"{self._state_prefix}/virtuals/{virtual.id}/attributes",
                 json.dumps(virtual.config),
             )
+            # TODO should also dump effect config to attributes
 
     def _on_virtual_config_update(self, event):
-        # Event on settings change but not edit device
-        _LOGGER.warning("Virtual config update event %s fosr %s", event, event.virtual_id)
-
+        """Callback for virtual configuration updates."""
         virtual = self._ledfx.virtuals.get(event.virtual_id)
         self._client.publish(
             f"{self._state_prefix}/virtuals/{event.virtual_id}/attributes",
@@ -407,8 +405,7 @@ class MQTT_HASS(Integration):
         )
 
     def _on_system_config_update(self, event):
-        _LOGGER.warning("System config event %s", event)
-
+        """Callback for base config update events."""
         # Send potentially updated audio device
         self._client.publish(
             f"{self._state_prefix}/audio_source/state",
@@ -416,24 +413,22 @@ class MQTT_HASS(Integration):
         )
 
     def _on_scene_activated(self, event):
-        # Was able to trigger
-        _LOGGER.warning("Scene activated event %s", event)
+        """Callback for scene activated events."""
+        # Set activated scene
         self._client.publish(
             f"{self._state_prefix}/scene/state",
             event.scene_id,
         )
 
     def _on_global_state_paused(self, event):
-        # Was able to trigger
-        # TODO event should obviously have current paused state
-        _LOGGER.warning("Global state updated %s", event)
+        """Callback for global pause events."""
         self._client.publish(
             f"{self._state_prefix}/pause/state",
             STATE_OFF if self._ledfx.virtuals._paused else STATE_ON,
         )
 
     def _on_virtual_update(self, event):
-        # Was able to trigger
+        """Callback for any event that results in virtuals updates."""
         _LOGGER.warning("Virtual update event %s for %s", event.event_type, event.virtual_id)
 
         virtual = self._ledfx.virtuals.get(event.virtual_id)
@@ -453,7 +448,7 @@ class MQTT_HASS(Integration):
                         "g": color.green,
                         "b": color.blue
                     }
-                    state["color_mode"] = "rgb"  # TODO color ignored if no color_mode?
+                    state["color_mode"] = "rgb"
 
         _LOGGER.warning("Publish virtual state %r", state)
         self._client.publish(
@@ -462,6 +457,7 @@ class MQTT_HASS(Integration):
         )
 
     def _setup_ledfx_listeners(self) -> None:
+        """Setup LedFx event listeners."""
         EVENT_HANDLERS = {
             Event.SCENE_ACTIVATED: self._on_scene_activated,
             Event.EFFECT_SET: self._on_virtual_update,
@@ -494,13 +490,6 @@ class MQTT_HASS(Integration):
                 active_pixels += virtual.pixel_count
 
         # TODO when would this sensor be updated? e.g. what event?
-        _LOGGER.warning(
-            "active_pixels/total_pixels:"
-            + str(active_pixels)
-            + "/"
-            + str(total_pixels)
-        )
-        # ToDo create sensor with total_pixels
 
         # Setup event listeners
         self._setup_ledfx_listeners()
@@ -572,7 +561,7 @@ class MQTT_HASS(Integration):
             return
 
     def _on_virtual_set(self, topic, payload, match) -> None:
-        """MQTT listener for set commands on virtuals"""
+        """MQTT listener for set commands on virtuals."""
         _LOGGER.warning("Virtual set for %s: %s", topic, payload)
 
         # Get ID from RE match
@@ -661,12 +650,6 @@ class MQTT_HASS(Integration):
 
     def _on_mqtt_message(self, client, userdata, msg) -> None:
         """MQTT callback when messages are received."""
-        _LOGGER.error(
-            "MQTT-Message incoming: \n[MQTT    ] Topic: "
-            + msg.topic
-            + "\n[MQTT    ] Payload: "
-            + str(msg.payload)
-        )
 
         # Sanity check incoming message is at the right prefix
         prefix, _ = msg.topic.split("/", maxsplit=1)
@@ -680,85 +663,6 @@ class MQTT_HASS(Integration):
                 callback(msg.topic, msg.payload, match)
 
         # TODO want someway to know if there's an unhandled message
-
-        return
-
-        # TODO this is the initial state push
-        # paused_state = "OFF"
-        # if self._ledfx.virtuals._paused:
-        #     paused_state = "OFF"
-        # else:
-        #     paused_state = "ON"
-
-        # # React to Internal State-Handler
-        # total_pixels = 0
-        # for device in self._ledfx.devices.values():
-        #     total_pixels += device.pixel_count
-
-        # active_pixels = 0
-        # for virtual in self._ledfx.virtuals.values():
-        #     if virtual.active:
-        #         active_pixels += virtual.pixel_count
-
-        # if segs[0] == "ledfx":
-        #     if payload == "HomeAssistant initialized":
-        #         virtual = self._ledfx.virtuals.get(
-        #             next(iter(self._ledfx.virtuals))
-        #         )
-        #         client.publish(
-        #             f"{self._discovery_topic("select")}/ledfxtransitiontype/state",
-        #             virtual.config["transition_mode"],
-        #         )
-        #         client.publish(
-        #             f"{self.discovery_topic}/number/ledfxtransitiontime/state",
-        #             virtual.config["transition_time"],
-        #         )
-        #         # PausedState
-        #         client.publish(
-        #             f"{self._discovery_topic("switch")}/ledfxplay/state",
-        #             paused_state,
-        #         )
-        #         # AudioSelector
-        #         client.publish(
-        #             f"{self._discovery_topic("select")}/ledfxaudio/state",
-        #             AudioInputSource.input_devices()[
-        #                 self._ledfx.config.get("audio", {}).get(
-        #                     "audio_device", {}
-        #                 )
-        #             ],
-        #         )
-        #         # Pixel-Sensor
-        #         client.publish(
-        #             f"{self.discovery_topic}/sensor/ledfxpixelsensor/state",
-        #             str(active_pixels) + " / " + str(total_pixels),
-        #         )
-        #         # publish all virtual data on connect (meta)
-        #         for virtual in self._ledfx.virtuals.values():
-        #             self._publish_virtual_config(virtual.id, client)
-        #             self._publish_virtual_paused(virtual.id, client)
-        #     return
-
-        # TODO transitions?
-        # React to Transition-Type
-        # if virtualid in self.TRANSITION_MAPPING.keys():
-        #     # _LOGGER.info("Transitions: " + str(payload))
-        #     prior_state = self._ledfx.config["global_transitions"]
-        #     self._ledfx.config["global_transitions"] = True
-        #     virtual = self._ledfx.virtuals.get(
-        #         next(iter(self._ledfx.virtuals))
-        #     )
-        #     key = self.TRANSITION_MAPPING[virtualid]
-        #     if key == "transition_time":
-        #         try:
-        #             val = float(payload)
-        #         except ValueError as e:
-        #             _LOGGER.warning(e)
-        #             val = 0.5
-        #     else:
-        #         val = payload
-
-        #     virtual.update_config({key: val})
-        #     self._ledfx.config["global_transitions"] = prior_state
 
     async def on_delete(self):
         """Integration is being removed from LedFx."""
@@ -831,6 +735,7 @@ class MQTT_HASS(Integration):
         client.on_connect = self._on_mqtt_connect
         client.on_message = self._on_mqtt_message
 
+        # Setup last will
         client.will_set(f"{self._state_prefix}/mqtt", "offline")
 
         if self._config["username"] is not None:
