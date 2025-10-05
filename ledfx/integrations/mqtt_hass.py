@@ -599,6 +599,7 @@ class MQTT_HASS(Integration):
                 config={"color": f"#{color["r"]:02x}{color["g"]:02x}{color["b"]:02x}"},
             )
             virtual.set_effect(effect)
+            virtual.update_effect_config(effect)
 
         if effect := payload.get("effect"):
             # Set provided effect
@@ -620,21 +621,13 @@ class MQTT_HASS(Integration):
 
             # TODO probably need to try/except
             virtual.set_effect(effect)
-
-            # Update effect config? Did we change it?
             virtual.update_effect_config(effect)
-
-            save_config(
-                config=self._ledfx.config,
-                config_dir=self._ledfx.config_dir,
-            )
 
         if brightness := payload.get("brightness"):
             # Set effect brightness
             if effect := virtual.active_effect:
-                effect.brightness = float(brightness) / 100.0
-                # TODO?
-                # virtual.update_effect_config(effect)
+                effect.update_config({"brightness": float(brightness) / 100.0})
+                virtual.update_effect_config(effect)
 
         if state := payload.get("state"):
             # Virtual can't be activated without an effect
@@ -660,6 +653,11 @@ class MQTT_HASS(Integration):
                 virtual.update_effect_config(effect)
 
             virtual.active = state == STATE_ON
+
+        save_config(
+            config=self._ledfx.config,
+            config_dir=self._ledfx.config_dir,
+        )
 
     def _on_mqtt_message(self, client, userdata, msg) -> None:
         """MQTT callback when messages are received."""
