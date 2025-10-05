@@ -102,19 +102,17 @@ class MQTT_HASS(Integration):
 
         self._ledfx = ledfx
         self._config = config
-        self._client = None
-        self._data = []
-        self._listeners = []  # TODO rename, these are ledfx listeners
 
         self._host = f"{extract_ip()}:{ledfx.port}"  # TODO hash this into a "unique" ID? or get MAC address?
 
-        self._state_prefix = self._config['state_topic']
-        self._discovery_prefix = self._config['discovery_topic']
-
+        self._client = None
         self._mqtt_listeners = []
 
-    def _add_mqtt_listener(self, topic_regex: str, callback: Callable):
-        self._mqtt_listeners.append((re.compile(topic_regex), callback))
+        self._ledfx_listeners = []
+
+        self._state_prefix = self._config['state_topic']
+        self._discovery_prefix = self._config['discovery_topic']
+        self._published_discovery_topics = set()
 
     def _discovery_topic(self, platform: str) -> str:
         return f"{self._discovery_prefix}/{platform}/ledfx"
@@ -129,6 +127,14 @@ class MQTT_HASS(Integration):
             "manufacturer": "LedFx",
             "sw_version": f"{PROJECT_VERSION}",
         }
+
+    def _publish_discovery_config(self, topic: str, config: dict[str, Any]) -> None:
+        """Publish a discovery configuration and save the topic."""
+        # Save topic
+        self._published_discovery_topics.add(topic)
+
+        # Publish to broker
+        self._client.publish(topic, json.dumps(config))
 
     def _publish_sensor_discovery_config(self, sensor: str, config: EntityConfig) -> None:
         """Publish a sensor component discovery config."""
@@ -145,9 +151,9 @@ class MQTT_HASS(Integration):
         if category := config.entity_category:
             discovery_config["ent_cat"] = category
 
-        self._client.publish(
+        self._publish_discovery_config(
             f"{self._discovery_topic("sensor")}/{sensor}/config",
-            json.dumps(discovery_config),
+            discovery_config
         )
 
     def _publish_select_discovery_config(self, select: str, options: list[str], config: EntityConfig) -> None:
@@ -167,9 +173,9 @@ class MQTT_HASS(Integration):
         if category := config.entity_category:
             discovery_config["ent_cat"] = category
 
-        self._client.publish(
+        self._publish_discovery_config(
             f"{self._discovery_topic("select")}/{select}/config",
-            json.dumps(discovery_config),
+            discovery_config
         )
 
     def _publish_switch_discovery_config(self, switch: str, config: EntityConfig) -> None:
@@ -188,9 +194,9 @@ class MQTT_HASS(Integration):
         if category := config.entity_category:
             discovery_config["ent_cat"] = category
 
-        self._client.publish(
+        self._publish_discovery_config(
             f"{self._discovery_topic("switch")}/{switch}/config",
-            json.dumps(discovery_config),
+            discovery_config
         )
 
     def _publish_light_discovery_config(self, light: str, effects: list[str], config: EntityConfig) -> None:
@@ -219,12 +225,12 @@ class MQTT_HASS(Integration):
         if category := config.entity_category:
             discovery_config["ent_cat"] = category
 
-        self._client.publish(
+        self._publish_discovery_config(
             f"{self._discovery_topic("light")}/{light}/config",
-            json.dumps(discovery_config),
+            discovery_config
         )
 
-    def _publish_discovery_config(self) -> None:
+    def _publish_all_discovery_configs(self) -> None:
         """Publish all discovery configs."""
         # Pixle count sensor
         pixel_count = EntityConfig(
@@ -471,9 +477,12 @@ class MQTT_HASS(Integration):
         }
 
         for event, handler in EVENT_HANDLERS.items():
-            self._listeners.append(
+            self._ledfx_listeners.append(
                 self._ledfx.events.add_listener(handler, event)
             )
+
+    def _add_mqtt_listener(self, topic_regex: str, callback: Callable):
+        self._mqtt_listeners.append((re.compile(topic_regex), callback))
 
     def _on_mqtt_connect(self, client, userdata, flags, rc) -> None:
         """MQTT callback when we connect to the broker."""
@@ -495,7 +504,7 @@ class MQTT_HASS(Integration):
         self._setup_ledfx_listeners()
 
         # Publish HA discovery configs
-        self._publish_discovery_config()
+        self._publish_all_discovery_configs()
 
         # Subscribe to all set topics for all entities and virtuals
         self._client.subscribe(f"{self._state_prefix}/+/set")
@@ -666,41 +675,12 @@ class MQTT_HASS(Integration):
 
     async def on_delete(self):
         """Integration is being removed from LedFx."""
-        # TODO clean up all published configs, these don't match new layout
-        self._client.publish(
-            f"{self._discovery_topic("light")}/ledfxscene/config", json.dumps({})
-        )
-        self._client.publish(
-            f"{self._discovery_topic("light")}/ledfxtransition/config",
-            json.dumps({}),
-        )
-        self._client.publish(
-            f"{self._discovery_topic("select")}/ledfxaudio/config", json.dumps({})
-        )
-        self._client.publish(
-            f"{self._discovery_topic("select")}/ledfxsceneselect/config",
-            json.dumps({}),
-        )
-        self._client.publish(
-            f"{self._discovery_topic("select")}/ledfxtransitiontype/config",
-            json.dumps({}),
-        )
-        self._client.publish(
-            f"{self.discovery_topic}/number/ledfxtransitiontime/config",
-            json.dumps({}),
-        )
-        self._client.publish(
-            f"{self.discovery_topic}/sensor/ledfxpixelsensor/config",
-            json.dumps({}),
-        )
-        self._client.publish(
-            f"{self._discovery_topic("switch")}/ledfxplay/config", json.dumps({})
-        )
-        for virtual in self._ledfx.virtuals.values():
-            self._client.publish(
-                f"{self._discovery_topic("light")}/{virtual.id}/config",
-                json.dumps({}),
-            )
+
+        # Publish empty configs for all entities
+        for topic in self._published_discovery_topics:
+            self._client.publish(topic, json.dumps({}))
+        
+        self._published_discovery_topics.clear()
 
     def _stop(self) -> None:
         """Stop the integration and close the client."""
@@ -720,13 +700,13 @@ class MQTT_HASS(Integration):
         """Integration disabled. Disconnect from MQTT."""
 
         # Remove all listers
-        for remove_listener in self._listeners:
+        for remove_listener in self._ledfx_listeners:
             remove_listener()
-        self._listeners.clear()
+        self._ledfx_listeners.clear()
 
         # Stop client
         self._stop()
-        
+
         # Ensure super is called
         await super().disconnect()
 
