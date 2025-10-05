@@ -265,6 +265,7 @@ class MQTT_HASS(Integration):
             name="Audio Source",
             unique_id="ledfxaudio",  # TODO
             icon="mdi:volume-high",
+            entity_category="config"
         )
         self._publish_select_discovery_config(
             "audio_source",
