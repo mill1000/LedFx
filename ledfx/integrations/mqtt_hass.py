@@ -67,6 +67,11 @@ class MQTT_HASS(Integration):
                 default="homeassistant",
             ): str,
             vol.Required(
+                "stop_delay",
+                description="Delay in seconds before virtuals are stopped when turned off.",
+                default=15,
+            ): int,
+            vol.Required(
                 "ip_address",
                 description="MQTT IP address",
                 default="127.0.0.1",
@@ -113,6 +118,9 @@ class MQTT_HASS(Integration):
         self._state_prefix = self._config['state_topic']
         self._discovery_prefix = self._config['discovery_topic']
         self._published_discovery_topics = set()
+
+        self._virtual_stop_timers = {}
+        self._virtual_stop_delay = self._config['stop_delay']
 
     def _discovery_topic(self, platform: str) -> str:
         return f"{self._discovery_prefix}/{platform}/ledfx"
@@ -352,6 +360,19 @@ class MQTT_HASS(Integration):
         #     ),
         # )
 
+    def _stop_virtual(self, virtual_id) -> None:
+        """Stop a virtual by clearing its effect."""
+        virtual = self._ledfx.virtuals.get(virtual_id)
+        if not virtual:
+            _LOGGER.error("Unknown virtual '%s'.", virtual_id)
+            return
+
+        # Clear effect
+        virtual.clear_effect()
+
+        # Remove expired timer handle
+        self._virtual_stop_timers.pop(virtual.id, None)
+
     def _get_audio_source(self) -> str:
         """Get the current audio source."""
         audio_config = self._ledfx.config.get("audio", {})
@@ -461,6 +482,10 @@ class MQTT_HASS(Integration):
             f"{self._state_prefix}/virtuals/{virtual.id}/state",
             json.dumps(state)
         )
+
+        # Cancel any shutdown timers for the virtual
+        if virtual.active and (timer := self._virtual_stop_timers.pop(virtual.id, None)):
+            timer.cancel()
 
     def _setup_ledfx_listeners(self) -> None:
         """Setup LedFx event listeners."""
@@ -652,6 +677,11 @@ class MQTT_HASS(Integration):
 
             virtual.active = state == STATE_ON
 
+            if state == STATE_OFF:
+                # Start a timer to fully shut down virtual after some time
+                handle = self._ledfx.loop.call_later(self._virtual_stop_delay, self._stop_virtual, virtual.id)
+                self._virtual_stop_timers[virtual.id] = handle
+
         save_config(
             config=self._ledfx.config,
             config_dir=self._ledfx.config_dir,
@@ -679,7 +709,7 @@ class MQTT_HASS(Integration):
         # Publish empty configs for all entities
         for topic in self._published_discovery_topics:
             self._client.publish(topic, json.dumps({}))
-        
+
         self._published_discovery_topics.clear()
 
     def _stop(self) -> None:
