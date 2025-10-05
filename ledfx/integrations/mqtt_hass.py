@@ -249,20 +249,6 @@ class MQTT_HASS(Integration):
         )
         self._publish_sensor_discovery_config("pixel_count_sensor", pixel_count)
 
-        # Scene selector
-        scene_select = EntityConfig(
-            name="Scene",
-            unique_id="ledfxsceneselect",  # TODO
-            icon="mdi:image-multiple-outline",
-        )
-        self._publish_select_discovery_config(
-            "scene",
-            # TODO how to deal with scene updates
-            # TODO add "no scene" option?
-            list(self._ledfx.scenes._scenes.keys()),
-            scene_select,
-        )
-
        # Audio selector
         audio_select = EntityConfig(
             name="Audio Source",
@@ -439,14 +425,6 @@ class MQTT_HASS(Integration):
             self._get_audio_source(),
         )
 
-    def _on_scene_activated(self, event):
-        """Callback for scene activated events."""
-        # Set activated scene
-        self._client.publish(
-            f"{self._state_prefix}/scene/state",
-            event.scene_id,
-        )
-
     def _on_global_state_paused(self, event):
         """Callback for global pause events."""
         self._client.publish(
@@ -490,7 +468,6 @@ class MQTT_HASS(Integration):
     def _setup_ledfx_listeners(self) -> None:
         """Setup LedFx event listeners."""
         EVENT_HANDLERS = {
-            Event.SCENE_ACTIVATED: self._on_scene_activated,
             Event.EFFECT_SET: self._on_virtual_update,
             # Event.EFFECT_UPDATED: self._on_virtual_update,
             Event.VIRTUAL_PAUSE: self._on_virtual_update,
@@ -559,7 +536,6 @@ class MQTT_HASS(Integration):
         if entity == "scene":
             new_scene = payload.decode()
 
-            # TODO are we passing names or IDs?
             if new_scene not in self._ledfx.config["scenes"].keys():
                 _LOGGER.error("Unknown scene '%s'.", new_scene)
                 return
