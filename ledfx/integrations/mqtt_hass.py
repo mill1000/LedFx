@@ -250,14 +250,15 @@ class MQTT_HASS(Integration):
 
     def _publish_all_discovery_configs(self) -> None:
         """Publish all discovery configs."""
-        # Pixle count sensor
-        pixel_count = EntityConfig(
-            name="Pixel Count",
-            unique_id="ledfxpixelsensor",  # TODO
-            icon="mdi:led-variant-outline",
-            entity_category="diagnostic"
-        )
-        self._publish_sensor_discovery_config("pixel_count_sensor", pixel_count)
+        # TODO unclear how to reliably update this sensor
+        # # Pixel count sensor
+        # pixel_count = EntityConfig(
+        #     name="Pixel Count",
+        #     unique_id="ledfxpixelsensor",  # TODO
+        #     icon="mdi:led-variant-outline",
+        #     entity_category="diagnostic"
+        # )
+        # self._publish_sensor_discovery_config("pixel_count", pixel_count)
 
        # Audio selector
         audio_select = EntityConfig(
@@ -498,17 +499,6 @@ class MQTT_HASS(Integration):
         """MQTT callback when we connect to the broker."""
         # Save client now that we're online
         self._client = client
-
-        total_pixels = 0
-        for device in self._ledfx.devices.values():
-            total_pixels += device.pixel_count
-
-        active_pixels = 0
-        for virtual in self._ledfx.virtuals.values():
-            if virtual.active:
-                active_pixels += virtual.pixel_count
-
-        # TODO when would this sensor be updated? e.g. what event?
 
         # Setup event listeners
         self._setup_ledfx_listeners()
