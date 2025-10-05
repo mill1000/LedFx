@@ -122,7 +122,17 @@ class MQTT_HASS(Integration):
         self._virtual_stop_timers = {}
         self._virtual_stop_delay = self._config['stop_delay']
 
+    def _publish(self, topic: str, payload: str) -> None:
+        """Publish data to an MQTT topic."""
+        if not self._client:
+            _LOGGER.error("No client. Unable to publish '%s'.", topic)
+            return
+
+        _LOGGER.debug("Publish '%s': %s", topic, payload)
+        self._client.publish(topic, payload)
+
     def _discovery_topic(self, platform: str) -> str:
+        """Get the discovery topic for a given platform."""
         return f"{self._discovery_prefix}/{platform}/ledfx"
 
     @property
@@ -142,7 +152,7 @@ class MQTT_HASS(Integration):
         self._published_discovery_topics.add(topic)
 
         # Publish to broker
-        self._client.publish(topic, json.dumps(config))
+        self._publish(topic, json.dumps(config))
 
     def _publish_sensor_discovery_config(self, sensor: str, config: EntityConfig) -> None:
         """Publish a sensor component discovery config."""
@@ -348,6 +358,8 @@ class MQTT_HASS(Integration):
 
     def _stop_virtual(self, virtual_id) -> None:
         """Stop a virtual by clearing its effect."""
+        _LOGGER.debug("Stopping virtual '%s'.", virtual_id)
+
         virtual = self._ledfx.virtuals.get(virtual_id)
         if not virtual:
             _LOGGER.error("Unknown virtual '%s'.", virtual_id)
@@ -368,13 +380,13 @@ class MQTT_HASS(Integration):
     def _publish_initial_state(self) -> None:
         """Publish initial state to MQTT."""
         # Audio source
-        self._client.publish(
+        self._publish(
             f"{self._state_prefix}/audio_source/state",
             self._get_audio_source(),
         )
 
         # Global pause state
-        self._client.publish(
+        self._publish(
             f"{self._state_prefix}/pause/state",
             STATE_OFF if self._ledfx.virtuals._paused else STATE_ON,
         )
@@ -397,13 +409,12 @@ class MQTT_HASS(Integration):
                     }
                     state["color_mode"] = "rgb"  # TODO color ignored if no color_mode?
 
-            _LOGGER.warning("Publish virtual state %r", state)
-            self._client.publish(
+            self._publish(
                 f"{self._state_prefix}/virtuals/{virtual.id}/state",
                 json.dumps(state)
             )
 
-            self._client.publish(
+            self._publish(
                 f"{self._state_prefix}/virtuals/{virtual.id}/attributes",
                 json.dumps(virtual.config),
             )
@@ -412,7 +423,7 @@ class MQTT_HASS(Integration):
     def _on_virtual_config_update(self, event):
         """Callback for virtual configuration updates."""
         virtual = self._ledfx.virtuals.get(event.virtual_id)
-        self._client.publish(
+        self._publish(
             f"{self._state_prefix}/virtuals/{event.virtual_id}/attributes",
             json.dumps(virtual.config),
         )
@@ -420,22 +431,20 @@ class MQTT_HASS(Integration):
     def _on_system_config_update(self, event):
         """Callback for base config update events."""
         # Send potentially updated audio device
-        self._client.publish(
+        self._publish(
             f"{self._state_prefix}/audio_source/state",
             self._get_audio_source(),
         )
 
     def _on_global_state_paused(self, event):
         """Callback for global pause events."""
-        self._client.publish(
+        self._publish(
             f"{self._state_prefix}/pause/state",
             STATE_OFF if self._ledfx.virtuals._paused else STATE_ON,
         )
 
     def _on_virtual_update(self, event):
         """Callback for any event that results in virtuals updates."""
-        _LOGGER.warning("Virtual update event %s for %s", event.event_type, event.virtual_id)
-
         virtual = self._ledfx.virtuals.get(event.virtual_id)
 
         state = {
@@ -455,8 +464,7 @@ class MQTT_HASS(Integration):
                     }
                     state["color_mode"] = "rgb"
 
-        _LOGGER.warning("Publish virtual state %r", state)
-        self._client.publish(
+        self._publish(
             f"{self._state_prefix}/virtuals/{virtual.id}/state",
             json.dumps(state)
         )
@@ -520,12 +528,10 @@ class MQTT_HASS(Integration):
         self._publish_initial_state()
 
         # Set connected state for HA availability
-        self._client.publish(f"{self._state_prefix}/mqtt", "online")
+        self._publish(f"{self._state_prefix}/mqtt", "online")
 
     def _on_entity_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on base entities."""
-        _LOGGER.warning("Set for %s: %s", topic, payload)
-
         # Get ID from RE match
         entity = match.group('entity')
 
@@ -572,7 +578,6 @@ class MQTT_HASS(Integration):
 
     def _on_virtual_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on virtuals."""
-        _LOGGER.warning("Virtual set for %s: %s", topic, payload)
 
         # Get ID from RE match
         virtual_id = match.group('virtual_id')
@@ -672,6 +677,8 @@ class MQTT_HASS(Integration):
             _LOGGER.warning("Received unexpected MQTT message at '%s'", msg.topic)
             return
 
+        _LOGGER.debug("Received MQTT message '%s': %s", msg.topic, msg.payload)
+
         # Make required callbacks
         for pattern, callback in self._mqtt_listeners:
             if match := pattern.fullmatch(msg.topic):
@@ -684,7 +691,7 @@ class MQTT_HASS(Integration):
 
         # Publish empty configs for all entities
         for topic in self._published_discovery_topics:
-            self._client.publish(topic, json.dumps({}))
+            self._publish(topic, json.dumps({}))
 
         self._published_discovery_topics.clear()
 
@@ -692,7 +699,7 @@ class MQTT_HASS(Integration):
         """Stop the integration and close the client."""
         if self._client:
             # Update availability topic
-            self._client.publish(f"{self._state_prefix}/mqtt", "offline")
+            self._publish(f"{self._state_prefix}/mqtt", "offline")
 
             # Stop and remove client
             self._client.loop_stop()
