@@ -515,11 +515,13 @@ class MQTT_HASS(Integration):
         self._add_mqtt_listener(rf"{self._state_prefix}/(?P<entity>[^/]+)/set", self._on_entity_set)
         self._add_mqtt_listener(rf"{self._state_prefix}/virtuals/(?P<virtual_id>[^/]+)/set", self._on_virtual_set)
 
-        # Publish initial states
-        self._publish_initial_state()
+        def schedule_initial_publish() -> None:
+            # Schedule the initial state publish and online status publish
+            self._ledfx.loop.call_later(2.0, self._publish_initial_state)
+            self._ledfx.loop.call_later(2.0, self._publish, f"{self._state_prefix}/mqtt", "online")
 
-        # Set connected state for HA availability
-        self._publish(f"{self._state_prefix}/mqtt", "online")
+        # Execute schedule function on the LedFx loop
+        self._ledfx.loop.call_soon_threadsafe(schedule_initial_publish)
 
     def _on_entity_set(self, topic, payload, match) -> None:
         """MQTT listener for set commands on base entities."""
@@ -650,9 +652,13 @@ class MQTT_HASS(Integration):
             virtual.active = state == STATE_ON
 
             if state == STATE_OFF:
-                # Start a timer to fully shut down virtual after some time
-                handle = self._ledfx.loop.call_later(self._virtual_stop_delay, self._stop_virtual, virtual.id)
-                self._virtual_stop_timers[virtual.id] = handle
+                def schedule_virtual_stop() -> None:
+                    # Start a timer to fully shut down virtual after some time
+                    handle = self._ledfx.loop.call_later(self._virtual_stop_delay, self._stop_virtual, virtual.id)
+                    self._virtual_stop_timers[virtual.id] = handle
+
+                # Start the timer from the event loop
+                self._ledfx.loop.call_soon_threadsafe(schedule_virtual_stop)
 
         save_config(
             config=self._ledfx.config,
